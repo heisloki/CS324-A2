@@ -1,10 +1,10 @@
-package org.example.worker; // Package for worker-related classes
+package org.rmi.example.worker; // Package for worker-related classes
 
-import org.example.bootstrap.BootstrapService; // To register with bootstrap node
-import org.example.jobs.Job;                   // Job data structure
-import org.example.jobs.JobResult;             // Job result structure
-import org.example.jobs.JobUtils;              // Shared data-shape + isPrime helpers
-import org.example.leader.LeaderNode;          // Job splitting/combining helper (coordinator side)
+import org.rmi.example.bootstrap.BootstrapService; // To register with bootstrap node
+import org.rmi.example.jobs.Job;                   // Job data structure
+import org.rmi.example.jobs.JobResult;             // Job result structure
+import org.rmi.example.jobs.JobUtils;              // Shared data-shape + isPrime helpers
+import org.rmi.example.leader.LeaderNode;          // Job splitting/combining helper (coordinator side)
 import java.rmi.registry.LocateRegistry;       // To find RMI registry
 import java.rmi.registry.Registry;             // Registry reference
 import java.rmi.server.UnicastRemoteObject;    // Base class for RMI objects

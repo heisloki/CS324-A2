@@ -1,8 +1,8 @@
-package org.example.leader; // Package for leader/coordinator-related classes
+package org.rmi.example.leader; // Package for leader/coordinator-related classes
 
-import org.example.jobs.Job;
-import org.example.jobs.JobResult;
-import org.example.jobs.JobUtils;
+import org.rmi.example.jobs.Job;
+import org.rmi.example.jobs.JobResult;
+import org.rmi.example.jobs.JobUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;

@@ -1,9 +1,9 @@
-package org.client;
+package org.rmi.client;
 
-import org.example.bootstrap.BootstrapService;
-import org.example.jobs.Job;
-import org.example.jobs.JobResult;
-import org.example.worker.WorkerInterface;
+import org.rmi.example.bootstrap.BootstrapService;
+import org.rmi.example.jobs.Job;
+import org.rmi.example.jobs.JobResult;
+import org.rmi.example.worker.WorkerInterface;
 
 import javax.swing.*;
 import java.awt.*;

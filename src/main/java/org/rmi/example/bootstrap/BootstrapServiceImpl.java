@@ -1,6 +1,6 @@
-package org.example.bootstrap;
+package org.rmi.example.bootstrap;
 
-import org.example.worker.WorkerInterface; // Worker interface reference
+import org.rmi.example.worker.WorkerInterface; // Worker interface reference
 import java.rmi.RemoteException;           // RMI exception handling
 import java.rmi.server.UnicastRemoteObject; // Base class for RMI objects
 import java.util.ArrayList;                // Store workers in a list

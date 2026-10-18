@@ -1,7 +1,7 @@
-package org.example.worker; // Package for worker-related classes
+package org.rmi.example.worker; // Package for worker-related classes
 
-import org.example.jobs.Job;       // Import the Job data structure (task details)
-import org.example.jobs.JobResult; // Import the JobResult structure (task output)
+import org.rmi.example.jobs.Job;       // Import the Job data structure (task details)
+import org.rmi.example.jobs.JobResult; // Import the JobResult structure (task output)
 import java.rmi.Remote;            // All RMI interfaces must extend Remote
 import java.rmi.RemoteException;   // RMI methods must declare this exception
 

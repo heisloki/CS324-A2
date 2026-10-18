@@ -1,4 +1,4 @@
-package org.example.jobs; // Same package as Job/JobResult
+package org.rmi.example.jobs; // Same package as Job/JobResult
 
 import java.util.List;
 

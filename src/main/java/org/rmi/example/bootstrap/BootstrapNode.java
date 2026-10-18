@@ -1,4 +1,4 @@
-package org.example.bootstrap;
+package org.rmi.example.bootstrap;
 
 import java.rmi.registry.LocateRegistry; // To start RMI registry
 import java.rmi.registry.Registry;       // Registry reference

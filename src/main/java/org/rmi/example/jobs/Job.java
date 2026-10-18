@@ -1,4 +1,4 @@
-package org.example.jobs; // Package for job-related classes
+package org.rmi.example.jobs; // Package for job-related classes
 
 import java.io.Serializable; // Jobs must be serializable to travel over RMI
 

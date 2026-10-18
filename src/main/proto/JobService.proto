@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "ds.grpc";
+option java_outer_classname = "JobServiceProto";
+
+service JobService {
+  rpc SubmitJob(JobRequest) returns (JobResponse);
+  rpc StreamProgress(JobStatusRequest) returns (stream JobProgress);
+}
+
+message JobRequest {
+  string jobType = 1; // MAX, PRIMESUM, PRIMECOUNT
+  repeated int32 numbers = 2;
+  int32 start = 3;
+  int32 end = 4;
+}
+
+message JobResponse {
+  string jobId = 1;
+  string status = 2;
+}
+
+message JobStatusRequest {
+  string jobId = 1;
+}
+
+message JobProgress {
+  int32 percentComplete = 1;
+  string workerId = 2;
+}

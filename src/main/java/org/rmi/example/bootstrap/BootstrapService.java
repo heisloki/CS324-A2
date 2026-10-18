@@ -1,6 +1,6 @@
-package org.example.bootstrap; // Package for bootstrap-related classes
+package org.rmi.example.bootstrap; // Package for bootstrap-related classes
 
-import org.example.worker.WorkerInterface; // Workers register here
+import org.rmi.example.worker.WorkerInterface; // Workers register here
 import java.rmi.Remote;                     // All RMI interfaces must extend Remote
 import java.rmi.RemoteException;            // RMI methods must declare this exception
 import java.util.List;                      // To return a list of workers
