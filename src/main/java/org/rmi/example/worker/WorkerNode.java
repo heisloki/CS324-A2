@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 // WorkerNode implements WorkerInterface so it can be called remotely
 public class WorkerNode extends UnicastRemoteObject implements WorkerInterface {
 
-    // Required by the assignment spec — a marker field on every worker node.
+
     public static final String leaderman = "cs324";
 
     // How long a node waits, after joining an ELECTION flood, before deciding
