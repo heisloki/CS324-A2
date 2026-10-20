@@ -1,0 +1,282 @@
+syntax = "proto3";
+
+package distrilab;
+
+option java_multiple_files = true;
+option java_package = "ds.grpc";
+option java_outer_classname = "DistriLabProto";
+
+// ------------------------------------------------------------------ common types
+
+message Empty {}
+
+message Ack {
+  bool ok = 1;
+  string message = 2;
+}
+
+message NodeInfo {
+  int32 id = 1;
+  string host = 2;
+  int32 port = 3;
+}
+
+enum JobType {
+  JOB_TYPE_UNSPECIFIED = 0;
+  JOB_TYPE_MAX = 1;         // MAX(numbers)
+  JOB_TYPE_PRIMESUM = 2;    // PRIMESUM(start, end)
+  JOB_TYPE_PRIMECOUNT = 3;  // PRIMECOUNT(numbers)
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_RUNNING = 1;
+  JOB_STATE_COMPLETED = 2;
+  JOB_STATE_FAILED = 3;
+}
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_QUEUED = 1;     // waiting for a worker (e.g. its worker just died)
+  TASK_STATE_RUNNING = 2;
+  TASK_STATE_COMPLETED = 3;
+  TASK_STATE_FAILED = 4;
+}
+
+// "term" is the epoch of a coordinator. Every election picks a higher term, and every
+// message sent BY a coordinator carries it. A worker ignores a coordinator whose term is
+// older than the newest one it knows (a "zombie" coordinator that was only slow).
+message CoordinatorInfo {
+  bool present = 1;   // false = there is no coordinator right now (election in progress)
+  NodeInfo node = 2;
+  int64 term = 3;
+  int32 jac = 4;      // the winner's Job Allocation Counter when it was elected
+}
+
+// ================================================================== BOOTSTRAP
+
+service BootstrapService {
+  // A worker joins. Bootstrap makes the id unique and returns random live peers to link to.
+  rpc Register(RegisterRequest) returns (RegisterReply);
+  // Graceful leave (worker shutdown hook).
+  rpc Unregister(UnregisterRequest) returns (Ack);
+  // All workers Bootstrap currently believes are alive.
+  rpc GetWorkers(Empty) returns (WorkerList);
+  // A worker that lost contact with another node tells Bootstrap; Bootstrap verifies and prunes.
+  rpc ReportFailure(FailureReport) returns (Ack);
+  // Clients and joining workers ask who the coordinator is (present=false during an election).
+  rpc GetCoordinator(Empty) returns (CoordinatorInfo);
+  // Called by the winner of an election. Stale terms are rejected.
+  rpc SetCoordinator(CoordinatorInfo) returns (Ack);
+}
+
+message RegisterRequest {
+  string host = 1;          // address other nodes can reach this worker on (use the LAN IP across machines)
+  int32 port = 2;
+  int32 requested_id = 3;   // 0 = Bootstrap assigns one. Otherwise must be free (or held by a dead worker).
+}
+
+message RegisterReply {
+  bool accepted = 1;
+  string message = 2;                // why it was rejected, or a short note
+  NodeInfo self = 3;                 // the confirmed identity (id assigned/confirmed)
+  repeated NodeInfo peers = 4;       // randomly chosen live workers to connect to (empty for the first worker)
+  CoordinatorInfo coordinator = 5;   // current coordinator, so a late joiner needs no flood to learn it
+}
+
+message UnregisterRequest { int32 id = 1; }
+
+message WorkerList { repeated NodeInfo workers = 1; }
+
+message FailureReport {
+  int32 reporter_id = 1;
+  int32 suspect_id = 2;
+  string reason = 3;
+}
+
+// ================================================================== PEER (worker <-> worker)
+
+service PeerService {
+  // Liveness probe. Used by Bootstrap, by workers watching the coordinator, and by the coordinator.
+  rpc Ping(PingRequest) returns (PingReply);
+  // Link two workers in the unstructured network (the caller also links back on its side).
+  rpc AddNeighbor(NodeInfo) returns (Ack);
+  // Election, as an ECHO WAVE: a worker handles a given election_id exactly once, forwards it to
+  // its other neighbours, waits for their replies, and answers its parent with the best candidate
+  // found in its part of the network. The initiator therefore learns the winner of the WHOLE
+  // connected network, with no timeout guessing.
+  rpc Election(ElectionRequest) returns (ElectionReply);
+  // Flooded after an election so every reachable worker learns the new coordinator.
+  rpc AnnounceCoordinator(CoordinatorAnnouncement) returns (Ack);
+}
+
+message PingRequest { int32 sender_id = 1; }
+
+message PingReply {
+  int32 id = 1;
+  int32 jac = 2;
+  int64 term = 3;            // newest coordinator term this worker knows
+  int32 coordinator_id = 4;  // 0 = none known
+}
+
+message ElectionRequest {
+  string election_id = 1;   // unique, e.g. "<initiatorId>-<uuid>"
+  int32 initiator_id = 2;
+  int64 term = 3;           // the term this election will establish
+  int32 sender_id = 4;      // the caller (this worker's parent in the wave)
+}
+
+// Winner rule: LOWEST jac wins; on a tie the HIGHEST id wins.
+message Candidate {
+  NodeInfo node = 1;
+  int32 jac = 2;
+}
+
+message ElectionReply {
+  bool already_seen = 1;    // true: this worker already handled election_id, it adds nothing
+  Candidate best = 2;       // best candidate in this worker's part of the network (unset if already_seen)
+  int32 nodes_visited = 3;  // workers covered by this subtree, so the initiator can report how many it considered
+}
+
+message CoordinatorAnnouncement {
+  string announcement_id = 1;   // a worker forwards a given announcement at most once
+  CoordinatorInfo coordinator = 2;
+  int32 sender_id = 3;
+}
+
+// ================================================================== TASKS (coordinator -> worker)
+
+service TaskService {
+  // Run one task. The worker streams TaskUpdates while it computes: real progress (processed/total)
+  // plus a checkpoint (partial_value). The last message has finished=true and the task result.
+  // If the stream breaks the coordinator reassigns the task, resuming from the last checkpoint.
+  rpc ExecuteTask(TaskRequest) returns (stream TaskUpdate);
+}
+
+message TaskRequest {
+  string job_id = 1;
+  string task_id = 2;       // unique per task, e.g. "<jobId>-t3". Results are keyed by it, so a duplicate is harmless.
+  JobType type = 3;
+  repeated int32 numbers = 4;   // MAX / PRIMECOUNT: this task's slice of the list
+  int32 range_start = 5;        // PRIMESUM: this task's sub-range (inclusive)
+  int32 range_end = 6;
+  int64 term = 7;               // the coordinator's term (fencing)
+  int32 attempt = 8;            // 1 = first assignment, 2+ = reassigned after a failure
+  int64 resume_offset = 9;      // items a previous worker already finished (0 = start from scratch)
+  int64 resume_value = 10;      // that worker's partial result at resume_offset (only meaningful if resume_offset > 0)
+}
+
+message TaskUpdate {
+  string task_id = 1;
+  int32 worker_id = 2;
+  int64 processed = 3;      // items finished so far (counts the resumed items too)
+  int64 total = 4;
+  int64 partial_value = 5;  // running max / sum / count after `processed` items = the checkpoint
+  bool finished = 6;        // true on the last message; partial_value is then the final task result
+}
+
+// ================================================================== JOBS (client <-> coordinator)
+
+service JobService {
+  // Idempotent: the client generates job_id, so re-sending the same job (for example after the
+  // coordinator failed over) never creates a duplicate.
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobReply);
+  // Streams real progress until the job ends. After a coordinator failure the client simply
+  // calls WatchJob(job_id) again on the new coordinator.
+  rpc WatchJob(WatchJobRequest) returns (stream JobProgress);
+}
+
+message SubmitJobRequest {
+  string job_id = 1;        // client-generated UUID
+  JobType type = 2;
+  repeated int32 numbers = 3;   // MAX / PRIMECOUNT
+  int32 range_start = 4;        // PRIMESUM
+  int32 range_end = 5;
+}
+
+enum SubmitStatus {
+  SUBMIT_STATUS_UNSPECIFIED = 0;
+  SUBMIT_STATUS_ACCEPTED = 1;
+  SUBMIT_STATUS_ALREADY_KNOWN = 2;    // same job_id seen before: not duplicated, just watch it
+  SUBMIT_STATUS_NOT_COORDINATOR = 3;  // this worker is not the coordinator; see coordinator_hint
+  SUBMIT_STATUS_TERM_EXHAUSTED = 4;   // this term's job limit was reached; retry shortly, a new coordinator is coming
+  SUBMIT_STATUS_NO_WORKERS = 5;
+  SUBMIT_STATUS_INVALID = 6;
+}
+
+message SubmitJobReply {
+  SubmitStatus status = 1;
+  string message = 2;
+  string job_id = 3;
+  CoordinatorInfo coordinator_hint = 4;
+}
+
+message WatchJobRequest { string job_id = 1; }
+
+message JobProgress {
+  string job_id = 1;
+  JobState state = 2;
+  double percent_complete = 3;  // 0..100, computed from items workers have actually processed
+  int64 processed_items = 4;
+  int64 total_items = 5;
+  repeated TaskProgress tasks = 6;  // worker-level breakdown, shown when the progress bar is clicked
+  bool has_result = 7;
+  int64 result_value = 8;
+  string result_text = 9;
+  int32 coordinator_id = 10;
+  int64 term = 11;
+  string message = 12;          // e.g. "Worker 3 failed - its task was reassigned to Worker 4"
+}
+
+message TaskProgress {
+  string task_id = 1;
+  int32 worker_id = 2;          // 0 while queued with no worker
+  TaskState state = 3;
+  int64 processed = 4;
+  int64 total = 5;
+  double percent_complete = 6;
+  int32 attempt = 7;            // > 1 means this task was reassigned
+}
+
+// ================================================================== REPLICATION (coordinator -> all workers)
+
+service ReplicaService {
+  // The coordinator pushes its job table to every worker whenever it changes. A replica keeps only
+  // the snapshot with the highest sequence. If the coordinator dies, whichever worker wins the next
+  // election already holds the state and resumes the unfinished jobs.
+  rpc ReplicateState(StateSnapshot) returns (Ack);
+  // Used by a new coordinator (to pick the freshest copy among survivors) and by late joiners.
+  rpc FetchState(Empty) returns (StateSnapshot);
+}
+
+message StateSnapshot {
+  int64 term = 1;
+  int32 coordinator_id = 2;
+  int64 sequence = 3;           // grows with every change
+  int32 jobs_this_term = 4;
+  repeated JobRecord jobs = 5;  // unfinished jobs, plus recently finished ones so a reconnecting client still gets its result
+}
+
+message JobRecord {
+  string job_id = 1;
+  JobType type = 2;
+  repeated int32 numbers = 3;   // the full input (stored once per job)
+  int32 range_start = 4;
+  int32 range_end = 5;
+  JobState state = 6;
+  int64 result_value = 7;
+  repeated TaskRecord tasks = 8;
+}
+
+message TaskRecord {
+  string task_id = 1;
+  TaskState state = 2;
+  int32 worker_id = 3;
+  int32 attempt = 4;
+  int64 item_start = 5;   // list jobs: start index into numbers.  PRIMESUM: start of the sub-range
+  int64 item_end = 6;     // list jobs: end index (exclusive).     PRIMESUM: end of the sub-range (inclusive)
+  int64 total = 7;
+  int64 processed = 8;    // last checkpoint
+  int64 partial_value = 9;
+  int64 result_value = 10;
+}
