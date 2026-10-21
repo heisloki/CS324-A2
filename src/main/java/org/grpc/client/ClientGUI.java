@@ -11,12 +11,16 @@ import org.grpc.bootstrap.BootstrapServer;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableColumn;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,12 +32,11 @@ import java.util.concurrent.TimeUnit;
 
 public class ClientGUI extends JFrame {
 
-    private final JTextField bootstrapHost =
-            new JTextField("localhost", 10);
-
-    private final JTextField bootstrapPort =
-            new JTextField(
-                    String.valueOf(BootstrapServer.DEFAULT_PORT), 6);
+    // Bootstrap connection uses the existing project configuration.
+    // These values are no longer editable in the GUI.
+    private static final String BOOTSTRAP_HOST = "localhost";
+    private static final int BOOTSTRAP_PORT =
+            BootstrapServer.DEFAULT_PORT;
 
     private final JComboBox<String> jobType =
             new JComboBox<>(
@@ -45,8 +48,11 @@ public class ClientGUI extends JFrame {
     private final JTextField numbersInput =
             new JTextField("5, 3, 9, 12, 7", 25);
 
+    private final JButton browseButton =
+            new JButton("Browse CSV...");
+
     private final JLabel inputLabel =
-            new JLabel("Numbers (comma-separated or file path):");
+            new JLabel("Numbers (comma-separated or CSV file):");
 
     private final JButton submitButton =
             new JButton("Submit Job");
@@ -59,13 +65,10 @@ public class ClientGUI extends JFrame {
 
     private final JTable jobTable = new JTable(jobTableModel);
 
-    // Each job gets its own background thread of execution.
     private final ExecutorService jobExecutor =
             Executors.newCachedThreadPool();
 
-    private final List<JobRow> jobs = new ArrayList<>();
-
-    private boolean closing = false;
+    private volatile boolean closing = false;
 
     public ClientGUI() {
         super("Distributed Computing - Client Dashboard");
@@ -80,10 +83,11 @@ public class ClientGUI extends JFrame {
 
         jobType.addActionListener(e -> updateInputFields());
         submitButton.addActionListener(e -> submitJob());
+        browseButton.addActionListener(e -> chooseCsvFile());
 
-        addWindowListener(new java.awt.event.WindowAdapter() {
+        addWindowListener(new WindowAdapter() {
             @Override
-            public void windowClosing(java.awt.event.WindowEvent e) {
+            public void windowClosing(WindowEvent e) {
                 closeApplication();
             }
         });
@@ -95,7 +99,6 @@ public class ClientGUI extends JFrame {
         root.setBackground(new Color(245, 247, 250));
         setContentPane(root);
 
-        // Header
         JPanel header = new JPanel(new BorderLayout());
         header.setOpaque(false);
 
@@ -103,12 +106,13 @@ public class ClientGUI extends JFrame {
         title.setFont(new Font("SansSerif", Font.BOLD, 25));
 
         JLabel subtitle = new JLabel(
-                "Submit jobs and monitor real distributed work in real time");
+                "Submit jobs and monitor actual distributed work in real time");
         subtitle.setForeground(new Color(90, 100, 115));
 
         JPanel titlePanel = new JPanel();
         titlePanel.setOpaque(false);
-        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
+        titlePanel.setLayout(
+                new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
         titlePanel.add(title);
         titlePanel.add(Box.createVerticalStrut(5));
         titlePanel.add(subtitle);
@@ -116,19 +120,13 @@ public class ClientGUI extends JFrame {
         header.add(titlePanel, BorderLayout.WEST);
         root.add(header, BorderLayout.NORTH);
 
-        // Main content
         JPanel center = new JPanel(new BorderLayout(12, 12));
         center.setOpaque(false);
-
-        JPanel submitPanel = buildSubmitPanel();
-        center.add(submitPanel, BorderLayout.NORTH);
-
-        JPanel jobsPanel = buildJobsPanel();
-        center.add(jobsPanel, BorderLayout.CENTER);
+        center.add(buildSubmitPanel(), BorderLayout.NORTH);
+        center.add(buildJobsPanel(), BorderLayout.CENTER);
 
         root.add(center, BorderLayout.CENTER);
 
-        // Footer
         JPanel footer = new JPanel(new BorderLayout());
         footer.setOpaque(false);
         footer.setBorder(new EmptyBorder(4, 0, 0, 0));
@@ -137,7 +135,7 @@ public class ClientGUI extends JFrame {
         footer.add(connectionStatus, BorderLayout.WEST);
 
         JLabel hint = new JLabel(
-                "Click a progress bar to view task details");
+                "Click a progress bar to view or reopen task details");
         hint.setForeground(new Color(90, 100, 115));
         footer.add(hint, BorderLayout.EAST);
 
@@ -158,31 +156,16 @@ public class ClientGUI extends JFrame {
         c.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel sectionTitle = new JLabel("Submit a new job");
-        sectionTitle.setFont(
-                new Font("SansSerif", Font.BOLD, 16));
+        sectionTitle.setFont(new Font("SansSerif", Font.BOLD, 16));
 
         c.gridx = 0;
         c.gridy = 0;
         c.gridwidth = 4;
         panel.add(sectionTitle, c);
-
         c.gridwidth = 1;
 
         c.gridx = 0;
         c.gridy = 1;
-        panel.add(new JLabel("Bootstrap host:"), c);
-
-        c.gridx = 1;
-        panel.add(bootstrapHost, c);
-
-        c.gridx = 2;
-        panel.add(new JLabel("Bootstrap port:"), c);
-
-        c.gridx = 3;
-        panel.add(bootstrapPort, c);
-
-        c.gridx = 0;
-        c.gridy = 2;
         panel.add(new JLabel("Job type:"), c);
 
         c.gridx = 1;
@@ -195,7 +178,7 @@ public class ClientGUI extends JFrame {
         panel.add(rangeStart, c);
 
         c.gridx = 0;
-        c.gridy = 3;
+        c.gridy = 2;
         panel.add(new JLabel("Range end:"), c);
 
         c.gridx = 1;
@@ -203,15 +186,25 @@ public class ClientGUI extends JFrame {
 
         c.gridx = 2;
         c.gridwidth = 2;
+        panel.add(new JLabel(
+                "PRIMESUM uses a range; other jobs use numbers or CSV."),
+                c);
+        c.gridwidth = 1;
+
+        c.gridx = 0;
+        c.gridy = 3;
         panel.add(inputLabel, c);
+
+        c.gridx = 1;
+        c.gridwidth = 2;
+        panel.add(numbersInput, c);
+
+        c.gridx = 3;
+        c.gridwidth = 1;
+        panel.add(browseButton, c);
 
         c.gridx = 0;
         c.gridy = 4;
-        c.gridwidth = 4;
-        panel.add(numbersInput, c);
-
-        c.gridx = 0;
-        c.gridy = 5;
         c.gridwidth = 4;
         c.fill = GridBagConstraints.NONE;
         c.anchor = GridBagConstraints.EAST;
@@ -225,9 +218,7 @@ public class ClientGUI extends JFrame {
         panel.setOpaque(false);
 
         JLabel sectionTitle = new JLabel("Submitted jobs");
-        sectionTitle.setFont(
-                new Font("SansSerif", Font.BOLD, 17));
-
+        sectionTitle.setFont(new Font("SansSerif", Font.BOLD, 17));
         panel.add(sectionTitle, BorderLayout.NORTH);
 
         jobTable.setRowHeight(38);
@@ -245,25 +236,22 @@ public class ClientGUI extends JFrame {
 
         TableColumn progressColumn =
                 jobTable.getColumnModel().getColumn(2);
-
-        progressColumn.setCellRenderer(
-                new ProgressRenderer());
-
+        progressColumn.setCellRenderer(new ProgressRenderer());
         progressColumn.setPreferredWidth(220);
         progressColumn.setMinWidth(180);
 
-        jobTable.getColumnModel().getColumn(0)
-                .setPreferredWidth(125);
-        jobTable.getColumnModel().getColumn(1)
-                .setPreferredWidth(105);
-        jobTable.getColumnModel().getColumn(3)
-                .setPreferredWidth(130);
-        jobTable.getColumnModel().getColumn(4)
-                .setPreferredWidth(230);
+        jobTable.getColumnModel().getColumn(0).setPreferredWidth(125);
+        jobTable.getColumnModel().getColumn(1).setPreferredWidth(105);
+        jobTable.getColumnModel().getColumn(3).setPreferredWidth(130);
+        jobTable.getColumnModel().getColumn(4).setPreferredWidth(230);
 
         jobTable.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+
                 int viewRow = jobTable.rowAtPoint(e.getPoint());
                 int viewColumn = jobTable.columnAtPoint(e.getPoint());
 
@@ -288,7 +276,6 @@ public class ClientGUI extends JFrame {
         scrollPane.getViewport().setBackground(Color.WHITE);
 
         panel.add(scrollPane, BorderLayout.CENTER);
-
         return panel;
     }
 
@@ -299,46 +286,80 @@ public class ClientGUI extends JFrame {
         rangeStart.setEnabled(primeSum);
         rangeEnd.setEnabled(primeSum);
         numbersInput.setEnabled(!primeSum);
+        browseButton.setEnabled(!primeSum);
         inputLabel.setEnabled(!primeSum);
 
         if (primeSum) {
-            inputLabel.setText("Numbers input not required");
+            inputLabel.setText("Numbers input not required:");
         } else {
-            inputLabel.setText(
-                    "Numbers (comma-separated or file path):");
+            inputLabel.setText("Numbers or CSV file:");
+        }
+    }
+
+    private void chooseCsvFile() {
+        JFileChooser chooser = new JFileChooser();
+
+        chooser.setDialogTitle("Select a CSV file");
+        chooser.setFileFilter(new FileNameExtensionFilter(
+                "CSV files (*.csv)", "csv"));
+        chooser.setAcceptAllFileFilterUsed(false);
+
+        String current = numbersInput.getText().trim();
+        if (!current.isEmpty()) {
+            try {
+                Path path = Path.of(current);
+                Path parent = Files.isDirectory(path)
+                        ? path : path.getParent();
+
+                if (parent != null && Files.isDirectory(parent)) {
+                    chooser.setCurrentDirectory(parent.toFile());
+                }
+            } catch (Exception ignored) {
+                // Keep the default file chooser directory.
+            }
+        }
+
+        if (chooser.showOpenDialog(this)
+                == JFileChooser.APPROVE_OPTION) {
+
+            Path selected = chooser.getSelectedFile().toPath();
+
+            if (!selected.getFileName().toString()
+                    .toLowerCase().endsWith(".csv")) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Please select a .csv file.",
+                        "Invalid file",
+                        JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            numbersInput.setText(selected.toAbsolutePath().toString());
         }
     }
 
     private void submitJob() {
+        if (closing) {
+            return;
+        }
+
         final SubmitJobRequest request;
+        final String host = BOOTSTRAP_HOST;
+        final int port = BOOTSTRAP_PORT;
 
         try {
-            String host = bootstrapHost.getText().trim();
-            int port = Integer.parseInt(
-                    bootstrapPort.getText().trim());
-
-            if (host.isEmpty() || port < 1 || port > 65535) {
-                throw new IllegalArgumentException(
-                        "Enter a valid Bootstrap host and port.");
-            }
-
             request = buildRequest();
-
         } catch (Exception e) {
             JOptionPane.showMessageDialog(
                     this,
-                    e.getMessage(),
+                    e.getMessage() == null
+                            ? "Invalid job input." : e.getMessage(),
                     "Invalid job input",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        String host = bootstrapHost.getText().trim();
-        int port = Integer.parseInt(bootstrapPort.getText().trim());
-
         JobRow row = new JobRow(request);
-
-        jobs.add(row);
         jobTableModel.addJob(row);
 
         submitButton.setEnabled(false);
@@ -370,16 +391,22 @@ public class ClientGUI extends JFrame {
                         TimeUnit.MINUTES.toMillis(30));
 
                 SwingUtilities.invokeLater(() -> {
+                    if (closing) {
+                        return;
+                    }
+
                     updateJob(row, done);
                     row.finished = true;
 
                     connectionStatus.setText(
                             "Job " + shortId(row.jobId)
-                                    + " finished: " + stateText(done.getState()));
+                                    + " finished: "
+                                    + stateText(done.getState()));
 
                     submitButton.setEnabled(true);
 
-                    if (done.getHasResult()) {
+                    if (done.getState() == JobState.JOB_STATE_COMPLETED
+                            && done.getHasResult()) {
                         JOptionPane.showMessageDialog(
                                 this,
                                 "Job completed successfully.\n\n"
@@ -392,6 +419,10 @@ public class ClientGUI extends JFrame {
 
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
+                    if (closing) {
+                        return;
+                    }
+
                     row.finished = true;
                     row.status = "CLIENT ERROR";
                     row.note = e.getMessage() == null
@@ -416,10 +447,8 @@ public class ClientGUI extends JFrame {
                         .setJobId(UUID.randomUUID().toString());
 
         if ("PRIMESUM".equals(selected)) {
-            int start = Integer.parseInt(
-                    rangeStart.getText().trim());
-            int end = Integer.parseInt(
-                    rangeEnd.getText().trim());
+            int start = Integer.parseInt(rangeStart.getText().trim());
+            int end = Integer.parseInt(rangeEnd.getText().trim());
 
             if (start < 2 || end < start) {
                 throw new IllegalArgumentException(
@@ -435,24 +464,35 @@ public class ClientGUI extends JFrame {
 
             if (input.isEmpty()) {
                 throw new IllegalArgumentException(
-                        "Enter numbers or a path to a numbers file.");
+                        "Enter integers or select a CSV file.");
             }
 
-            String content = Files.exists(Path.of(input))
-                    ? Files.readString(Path.of(input))
-                    : input;
+            String content;
+            Path path = null;
 
-            List<Integer> numbers = new ArrayList<>();
+            try {
+                path = Path.of(input);
+            } catch (Exception ignored) {
+                // Input may be a comma-separated list rather than a path.
+            }
 
-            for (String part : content.split("[,\\s]+")) {
-                if (!part.isBlank()) {
-                    numbers.add(Integer.parseInt(part.trim()));
+            if (path != null && Files.isRegularFile(path)) {
+                if (!path.getFileName().toString()
+                        .toLowerCase().endsWith(".csv")) {
+                    throw new IllegalArgumentException(
+                            "The selected input file must have a .csv extension.");
                 }
+
+                content = Files.readString(path);
+            } else {
+                content = input;
             }
+
+            List<Integer> numbers = parseIntegerInput(content);
 
             if (numbers.isEmpty()) {
                 throw new IllegalArgumentException(
-                        "No valid integers were found.");
+                        "The input contains no integers.");
             }
 
             if ("MAX".equals(selected)) {
@@ -470,6 +510,42 @@ public class ClientGUI extends JFrame {
         return builder.build();
     }
 
+    /**
+     * Reads a comma-separated list or a simple CSV containing integer values.
+     * Empty cells and a UTF-8 BOM are ignored. Non-integer cells are rejected
+     * so that malformed input is not silently submitted.
+     */
+    private List<Integer> parseIntegerInput(String content) {
+        List<Integer> numbers = new ArrayList<>();
+
+        String cleaned = content.replace("\uFEFF", "").trim();
+
+        if (cleaned.isEmpty()) {
+            return numbers;
+        }
+
+        String[] parts = cleaned.split("[,;\\s]+");
+
+        for (String part : parts) {
+            String token = part.trim();
+
+            if (token.isEmpty()) {
+                continue;
+            }
+
+            try {
+                numbers.add(Integer.parseInt(token));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "Invalid integer in input: '" + token
+                                + "'. Use a CSV containing integer values "
+                                + "without a text header.");
+            }
+        }
+
+        return numbers;
+    }
+
     private void updateJob(JobRow row, JobProgress progress) {
         row.progress = progress;
         row.percent = Math.max(
@@ -478,7 +554,6 @@ public class ClientGUI extends JFrame {
                         progress.getPercentComplete())));
 
         row.status = stateText(progress.getState());
-
         row.result = progress.getHasResult()
                 ? progress.getResultText()
                 : progress.getMessage();
@@ -489,11 +564,11 @@ public class ClientGUI extends JFrame {
 
         jobTableModel.refresh(row);
 
-        // Keep an open worker-breakdown dialog synchronized with
-        // the latest real gRPC progress snapshot.
-        if (row.breakdownDialog != null
-                && row.breakdownDialog.isDisplayable()) {
-            row.breakdownDialog.refresh(progress);
+        // Refresh an open dialog. If it was closed, the next click
+        // creates a new dialog using the latest saved progress.
+        BreakdownDialog dialog = row.breakdownDialog;
+        if (dialog != null && dialog.isDisplayable()) {
+            dialog.refresh(progress);
         }
 
         connectionStatus.setText(
@@ -511,15 +586,31 @@ public class ClientGUI extends JFrame {
             return;
         }
 
-        if (row.breakdownDialog != null
-                && row.breakdownDialog.isDisplayable()) {
-            row.breakdownDialog.toFront();
-            row.breakdownDialog.refresh(row.progress);
+        BreakdownDialog existing = row.breakdownDialog;
+
+        if (existing != null && existing.isDisplayable()) {
+            existing.refresh(row.progress);
+            existing.setVisible(true);
+            existing.toFront();
+            existing.requestFocus();
             return;
         }
 
-        row.breakdownDialog = new BreakdownDialog(this, row);
-        row.breakdownDialog.setVisible(true);
+        // Always create a fresh dialog after the previous one was disposed.
+        BreakdownDialog dialog = new BreakdownDialog(this, row);
+        row.breakdownDialog = dialog;
+
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosed(WindowEvent e) {
+                if (row.breakdownDialog == dialog) {
+                    row.breakdownDialog = null;
+                }
+            }
+        });
+
+        dialog.refresh(row.progress);
+        dialog.setVisible(true);
     }
 
     private void closeApplication() {
@@ -539,6 +630,7 @@ public class ClientGUI extends JFrame {
 
         closing = true;
         submitButton.setEnabled(false);
+        browseButton.setEnabled(false);
         connectionStatus.setText("Closing client...");
 
         jobExecutor.shutdownNow();
@@ -568,16 +660,12 @@ public class ClientGUI extends JFrame {
                 UIManager.setLookAndFeel(
                         UIManager.getSystemLookAndFeelClassName());
             } catch (Exception ignored) {
-                // Keep Swing's default look and feel.
+                // Use the default look and feel.
             }
 
             new ClientGUI().setVisible(true);
         });
     }
-
-    // ------------------------------------------------------------
-    // Job table model
-    // ------------------------------------------------------------
 
     private static final class JobRow {
         final String jobId;
@@ -591,7 +679,7 @@ public class ClientGUI extends JFrame {
         volatile String note = "";
         volatile boolean finished;
 
-        BreakdownDialog breakdownDialog;
+        volatile BreakdownDialog breakdownDialog;
 
         JobRow(SubmitJobRequest request) {
             this.request = request;
@@ -666,10 +754,6 @@ public class ClientGUI extends JFrame {
         }
     }
 
-    // ------------------------------------------------------------
-    // Real progress-bar renderer
-    // ------------------------------------------------------------
-
     private static final class ProgressRenderer
             extends DefaultTableCellRenderer {
 
@@ -702,13 +786,8 @@ public class ClientGUI extends JFrame {
         }
     }
 
-    // ------------------------------------------------------------
-    // Worker/task breakdown dialog
-    // ------------------------------------------------------------
-
     private static final class BreakdownDialog extends JDialog {
 
-        private final JobRow job;
         private final TaskTableModel taskModel = new TaskTableModel();
         private final JTable taskTable = new JTable(taskModel);
         private final JLabel summary = new JLabel();
@@ -718,19 +797,17 @@ public class ClientGUI extends JFrame {
                     "Worker Breakdown - " + shortId(job.jobId),
                     false);
 
-            this.job = job;
-
+            setDefaultCloseOperation(DISPOSE_ON_CLOSE);
             setLayout(new BorderLayout(10, 10));
 
             JPanel header = new JPanel();
-            header.setLayout(new BoxLayout(
-                    header, BoxLayout.Y_AXIS));
+            header.setLayout(
+                    new BoxLayout(header, BoxLayout.Y_AXIS));
             header.setBorder(new EmptyBorder(12, 12, 4, 12));
 
             JLabel title = new JLabel(
                     job.type + " - " + shortId(job.jobId));
-            title.setFont(
-                    new Font("SansSerif", Font.BOLD, 17));
+            title.setFont(new Font("SansSerif", Font.BOLD, 17));
 
             header.add(title);
             header.add(Box.createVerticalStrut(6));
@@ -759,15 +836,11 @@ public class ClientGUI extends JFrame {
             setSize(850, 330);
             setMinimumSize(new Dimension(750, 280));
             setLocationRelativeTo(owner);
-
-            if (job.progress != null) {
-                refresh(job.progress);
-            }
         }
 
         void refresh(JobProgress progress) {
             summary.setText(String.format(
-                    "Overall completion: %.1f%%    |    Status: %s    |    Coordinator: Worker %d (term %d)",
+                    "Overall completion: %.1f%% | Status: %s | Coordinator: Worker %d (term %d)",
                     progress.getPercentComplete(),
                     stateText(progress.getState()),
                     progress.getCoordinatorId(),
@@ -830,7 +903,8 @@ public class ClientGUI extends JFrame {
                     return String.format(
                             "%.1f%%", task.getPercentComplete());
                 case 4:
-                    return taskStateText(task.getState());
+                    return task.getState().name()
+                            .replace("TASK_STATE_", "");
                 case 5:
                     return task.getAttempt()
                             + (task.getAttempt() > 1
@@ -838,10 +912,6 @@ public class ClientGUI extends JFrame {
                 default:
                     return "";
             }
-        }
-
-        private static String taskStateText(TaskState state) {
-            return state.name().replace("TASK_STATE_", "");
         }
     }
 }
